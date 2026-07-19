@@ -63,7 +63,18 @@ passwords, or anything else that doesn't regenerate itself.
 Grab `Mac.Cleaner.app.zip` from the
 [latest release](../../releases/latest), unzip, and drag to Applications.
 
-> **First launch:** right-click → **Open** (the app is unsigned).
+> **First launch — macOS will block the app** ("Apple could not verify…")
+> because it isn't notarized (that requires a paid Apple Developer account).
+> Two ways to open it anyway:
+>
+> 1. Try opening it once, then go to **System Settings → Privacy & Security**,
+>    scroll down to *"Mac Cleaner" was blocked*, and click **Open Anyway**; or
+> 2. In Terminal: `xattr -rd com.apple.quarantine "/Applications/Mac Cleaner.app"`
+>    then open normally.
+>
+> The app is open source — you can read every line it runs, or build it
+> yourself (below) and skip the warning entirely.
+>
 > The pre-built app is Apple Silicon (arm64). On an Intel Mac, run from
 > source instead — it works the same.
 
