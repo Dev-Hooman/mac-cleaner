@@ -12,6 +12,11 @@ files, documents, or settings.
 
 ![Mac Cleaner main window](screenshots/main.png)
 
+Individual selection with per-item confirmation for anything that isn't a
+regenerating cache:
+
+![Selection and safety badges](screenshots/selection.png)
+
 ## Why another cleaner?
 
 Most "cleaner" apps are opaque about what they delete. Mac Cleaner is the
