@@ -1,4 +1,8 @@
-# 🧹 Mac Cleaner
+<p align="center">
+  <img src="assets/icon.png" width="160" alt="Mac Cleaner icon">
+</p>
+
+<h1 align="center">Mac Cleaner</h1>
 
 A **safe, transparent disk-space cleaner for macOS** with a modern dark UI.
 Scans well-known cache and build-artifact locations, shows you exactly what it
@@ -113,3 +117,6 @@ python3 -m venv .venv
 ## License
 
 [MIT](LICENSE) — do whatever you like, no warranty.
+
+App icon: broom glyph by [UXWing](https://uxwing.com/broom-cleaning-icon/)
+(free for commercial use, no attribution required — credited anyway).
