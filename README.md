@@ -16,6 +16,10 @@ files, documents, or settings.
 
 ![Mac Cleaner main window](screenshots/main.png)
 
+**Simple scan** covers the always-safe locations. **Deep scan** additionally
+discovers project `node_modules` folders, browser profile caches, Xcode
+archives and local iPhone/iPad backups.
+
 Animated per-row progress while cleaning, honest per-row outcomes
 (`✓ CLEANED`, `PARTIAL`, `SKIPPED`) and a real freed-space total when done:
 
@@ -53,6 +57,15 @@ opposite:
 | iOS simulator devices | 🟡 CAUTION | `~/Library/Developer/CoreSimulator` |
 | iOS simulator runtimes | 🔴 ADMIN | `/Library/Developer/CoreSimulator` via password prompt |
 
+**Deep scan** adds:
+
+| Category | Badge | Details |
+|---|---|---|
+| Project node_modules | 🟡 CAUTION | Found across your projects — `npm install` restores them |
+| Browser caches | 🟢 SAFE | Chrome / Brave / Edge profile caches (quit the browser first) |
+| Xcode archives | 🟡 CAUTION | Old distribution archives |
+| iPhone / iPad backups | 🟡 CAUTION | Local device backups — irreplaceable |
+
 Anything that doesn't exist on your Mac simply shows `—` and is skipped.
 
 ## What it will never touch
@@ -62,10 +75,11 @@ passwords, or anything else that doesn't regenerate itself.
 
 ## Install
 
-### Option 1 — download the app (easiest)
+### Option 1 — download the installer (easiest)
 
-Grab `Mac.Cleaner.app.zip` from the
-[latest release](../../releases/latest), unzip, and drag to Applications.
+Grab `Mac.Cleaner.dmg` from the [latest release](../../releases/latest),
+open it, and drag **Mac Cleaner** onto the **Applications** shortcut.
+Then eject the disk image — the app runs from Applications.
 
 > **First launch — macOS will block the app** ("Apple could not verify…")
 > because it isn't notarized (that requires a paid Apple Developer account).

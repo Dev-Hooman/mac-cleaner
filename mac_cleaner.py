@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import queue
+import webbrowser
 
 try:
     import tkinter as tk
@@ -24,7 +25,13 @@ except ModuleNotFoundError:
         "or download the pre-built app from the GitHub releases page."
     )
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
+
+AUTHOR = "Abdul Rehman Sarfaraz"
+AUTHOR_HANDLE = "Dev-Hooman"
+URL_GITHUB = "https://github.com/Dev-Hooman"
+URL_REPO = "https://github.com/Dev-Hooman/mac-cleaner"
+URL_LINKEDIN = "https://www.linkedin.com/in/abdulrehman-sarfaraz/"
 
 HOME = os.path.expanduser("~")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -81,6 +88,8 @@ def paths_npm():
         os.path.join(HOME, ".npm", "_npx"),
         os.path.join(HOME, ".pnpm-store"),
         os.path.join(HOME, "Library", "pnpm", "store"),
+        os.path.join(HOME, ".bun", "install", "cache"),
+        os.path.join(HOME, ".yarn", "berry", "cache"),
     )
 
 
@@ -184,6 +193,83 @@ def paths_system_simulators():
     return _existing("/Library/Developer/CoreSimulator")
 
 
+# -- deep-scan discovery -----------------------------------------------------
+def paths_node_modules():
+    """Walk project folders (max depth 4) collecting node_modules dirs."""
+    found = []
+    skip_top = {
+        "Library",
+        "Applications",
+        "Movies",
+        "Music",
+        "Pictures",
+        "Public",
+    }
+
+    def walk(directory, depth):
+        if depth > 4:
+            return
+        try:
+            entries = list(os.scandir(directory))
+        except OSError:
+            return
+        for entry in entries:
+            try:
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+            except OSError:
+                continue
+            name = entry.name
+            if name.startswith("."):
+                continue
+            if depth == 0 and name in skip_top:
+                continue
+            if name == "node_modules":
+                found.append(entry.path)
+            else:
+                walk(entry.path, depth + 1)
+
+    walk(HOME, 0)
+    return found
+
+
+def paths_browser_caches():
+    out = []
+    bases = (
+        os.path.join(HOME, "Library", "Application Support", "Google", "Chrome"),
+        os.path.join(
+            HOME, "Library", "Application Support", "BraveSoftware", "Brave-Browser"
+        ),
+        os.path.join(HOME, "Library", "Application Support", "Microsoft Edge"),
+        os.path.join(HOME, "Library", "Application Support", "Chromium"),
+    )
+    for base in bases:
+        if not os.path.isdir(base):
+            continue
+        for profile in _children(base):
+            name = os.path.basename(profile)
+            if name != "Default" and not name.startswith("Profile"):
+                continue
+            out += _existing(
+                os.path.join(profile, "Cache"),
+                os.path.join(profile, "Code Cache"),
+                os.path.join(profile, "GPUCache"),
+                os.path.join(profile, "Service Worker", "CacheStorage"),
+                os.path.join(profile, "Service Worker", "ScriptCache"),
+            )
+    return out
+
+
+def paths_xcode_archives():
+    return _existing(os.path.join(HOME, "Library", "Developer", "Xcode", "Archives"))
+
+
+def paths_device_backups():
+    return _existing(
+        os.path.join(HOME, "Library", "Application Support", "MobileSync", "Backup")
+    )
+
+
 CATEGORIES = [
     {
         "id": "caches",
@@ -196,7 +282,7 @@ CATEGORIES = [
     {
         "id": "npm",
         "name": "JavaScript package caches",
-        "desc": "npm, npx and pnpm download caches — restored on next install",
+        "desc": "npm, pnpm, bun and yarn download caches — restored on next install",
         "badge": "SAFE",
         "paths": paths_npm,
         "default": True,
@@ -288,6 +374,43 @@ CATEGORIES = [
         "badge": "ADMIN",
         "paths": paths_system_simulators,
         "default": False,
+    },
+    # -- deep scan only -----------------------------------------------------
+    {
+        "id": "node_modules",
+        "name": "Project node_modules",
+        "desc": "Dependency folders found in your projects — restore with npm install",
+        "badge": "CAUTION",
+        "paths": paths_node_modules,
+        "default": False,
+        "deep": True,
+    },
+    {
+        "id": "browsers",
+        "name": "Browser caches",
+        "desc": "Chrome / Brave / Edge profile caches — quit the browser first",
+        "badge": "SAFE",
+        "paths": paths_browser_caches,
+        "default": False,
+        "deep": True,
+    },
+    {
+        "id": "archives",
+        "name": "Xcode archives",
+        "desc": "Old app archives — needed to re-export past builds to App Store",
+        "badge": "CAUTION",
+        "paths": paths_xcode_archives,
+        "default": False,
+        "deep": True,
+    },
+    {
+        "id": "backups",
+        "name": "iPhone / iPad backups",
+        "desc": "Local device backups — irreplaceable unless backed up elsewhere",
+        "badge": "CAUTION",
+        "paths": paths_device_backups,
+        "default": False,
+        "deep": True,
     },
 ]
 
@@ -417,6 +540,8 @@ class MacCleanerApp:
         self.busy = False
         self.active_cid = None
         self.spin_i = 0
+        self.mode = "simple"
+        self._scroll_accum = 0.0
 
         root.title("Mac Cleaner")
         root.geometry("880x680")
@@ -428,6 +553,7 @@ class MacCleanerApp:
             )
         except tk.TclError:
             pass
+        self._icon_image = None
         for icon_path in (
             os.path.join(APP_DIR, "assets", "icon.png"),
             os.path.join(APP_DIR, "icon.png"),
@@ -449,6 +575,10 @@ class MacCleanerApp:
         root.after(90, self._animate)
         self.scan()
 
+    # -- category helpers ----------------------------------------------------
+    def visible_categories(self):
+        return [c for c in CATEGORIES if not c.get("deep") or self.mode == "deep"]
+
     # -- layout -------------------------------------------------------------
     def _build_header(self):
         header = tk.Frame(self.root, bg=BG)
@@ -456,9 +586,23 @@ class MacCleanerApp:
 
         left = tk.Frame(header, bg=BG)
         left.pack(side="left")
+        title_row = tk.Frame(left, bg=BG)
+        title_row.pack(anchor="w")
         tk.Label(
-            left, text="Mac Cleaner", fg=TEXT, bg=BG, font=(FONT, 25, "bold")
-        ).pack(anchor="w")
+            title_row, text="Mac Cleaner", fg=TEXT, bg=BG, font=(FONT, 25, "bold")
+        ).pack(side="left")
+        about = tk.Label(
+            title_row,
+            text="ⓘ",
+            fg=FAINT,
+            bg=BG,
+            font=(FONT, 15),
+            cursor="pointinghand",
+        )
+        about.pack(side="left", padx=(10, 0), pady=(6, 0))
+        about.bind("<Button-1>", lambda _e: self.show_about())
+        about.bind("<Enter>", lambda _e: about.configure(fg=ACCENT))
+        about.bind("<Leave>", lambda _e: about.configure(fg=FAINT))
         tk.Label(
             left,
             text="Only regenerating caches and build artifacts — never your files.",
@@ -473,24 +617,68 @@ class MacCleanerApp:
             right, text="—", fg=TEXT, bg=BG, font=(FONT, 22, "bold")
         )
         self.free_label.pack(anchor="e")
-        tk.Label(right, text="FREE ON DISK", fg=FAINT, bg=BG, font=(FONT, 10, "bold")).pack(
-            anchor="e"
-        )
+        tk.Label(
+            right, text="FREE ON DISK", fg=FAINT, bg=BG, font=(FONT, 10, "bold")
+        ).pack(anchor="e")
 
     def _build_toolbar(self):
         bar = tk.Frame(self.root, bg=BG)
         bar.pack(fill="x", padx=30, pady=(14, 10))
+
+        # scan-mode switch
+        pill = tk.Frame(bar, bg=CARD)
+        pill.pack(side="left")
+        self.mode_btns = {}
+        for mode, label in (("simple", "Simple scan"), ("deep", "Deep scan")):
+            btn = tk.Label(
+                pill,
+                text=label,
+                font=(FONT, 11, "bold"),
+                padx=13,
+                pady=6,
+                cursor="pointinghand",
+            )
+            btn.pack(side="left")
+            btn.bind("<Button-1>", lambda _e, m=mode: self.set_mode(m))
+            self.mode_btns[mode] = btn
+        self._style_mode_pill()
+
+        self._text_button(bar, "Select safe", self.select_safe).pack(
+            side="left", padx=(18, 0)
+        )
+        tk.Label(bar, text="·", fg=FAINT, bg=BG, font=(FONT, 12)).pack(
+            side="left", padx=6
+        )
+        self._text_button(bar, "Select none", self.select_none).pack(side="left")
 
         self.clean_btn = self._button(bar, "Clean Selected", self.clean, primary=True)
         self.clean_btn.pack(side="right")
         self.rescan_btn = self._button(bar, "Rescan", self.scan)
         self.rescan_btn.pack(side="right", padx=(0, 10))
 
-        self._text_button(bar, "Select safe", self.select_safe).pack(side="left")
-        tk.Label(bar, text="·", fg=FAINT, bg=BG, font=(FONT, 12)).pack(
-            side="left", padx=6
-        )
-        self._text_button(bar, "Select none", self.select_none).pack(side="left")
+    def _style_mode_pill(self):
+        for mode, btn in self.mode_btns.items():
+            if mode == self.mode:
+                btn.configure(bg=ACCENT, fg="#FFFFFF")
+            else:
+                btn.configure(bg=CARD, fg=DIM)
+
+    def set_mode(self, mode):
+        if self.busy or mode == self.mode:
+            return
+        self.mode = mode
+        self._style_mode_pill()
+        for category in CATEGORIES:
+            if not category.get("deep"):
+                continue
+            cid = category["id"]
+            if mode == "deep":
+                self.rows[cid]["row"].pack(fill="x", pady=(0, 5), padx=6)
+            else:
+                self.selected[cid] = False
+                self._refresh_row(cid)
+                self.rows[cid]["row"].pack_forget()
+        self.scan()
 
     def _button(self, parent, text, command, primary=False):
         btn = tk.Label(
@@ -522,7 +710,9 @@ class MacCleanerApp:
         inner_holder = tk.Frame(outer, bg=BG)
         inner_holder.pack(fill="both", expand=True, padx=1, pady=1)
 
-        self.canvas = tk.Canvas(inner_holder, bg=BG, highlightthickness=0)
+        self.canvas = tk.Canvas(
+            inner_holder, bg=BG, highlightthickness=0, yscrollincrement=8
+        )
         scrollbar = tk.Scrollbar(
             inner_holder, orient="vertical", command=self.canvas.yview
         )
@@ -541,13 +731,39 @@ class MacCleanerApp:
         self.canvas.configure(yscrollcommand=scrollbar.set)
         self.canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        self.canvas.bind_all(
-            "<MouseWheel>",
-            lambda e: self.canvas.yview_scroll(-1 * int(e.delta), "units"),
-        )
+
+        # mouse wheels report notches; trackpads (Tk 8.7+) report precise
+        # pixel deltas through the separate TouchpadScroll event
+        self.canvas.bind_all("<MouseWheel>", self._on_wheel)
+        try:
+            self.canvas.bind_all("<TouchpadScroll>", self._on_touchpad)
+        except tk.TclError:
+            pass
 
         for category in CATEGORIES:
             self._build_row(category)
+            if category.get("deep"):
+                self.rows[category["id"]]["row"].pack_forget()
+
+    def _on_wheel(self, event):
+        delta = event.delta
+        if abs(delta) >= 120:
+            delta //= 120
+        self.canvas.yview_scroll(-delta * 3, "units")
+
+    def _on_touchpad(self, event):
+        try:
+            _dx, dy = self.root.tk.call("tk::PreciseScrollDeltas", event.delta)
+            dy = float(dy)
+        except (tk.TclError, ValueError):
+            dy = float(event.delta)
+        if not dy:
+            return
+        self._scroll_accum += dy
+        steps = int(self._scroll_accum / 8)
+        if steps:
+            self._scroll_accum -= steps * 8
+            self.canvas.yview_scroll(-steps, "units")
 
     def _build_row(self, category):
         cid = category["id"]
@@ -639,6 +855,75 @@ class MacCleanerApp:
         )
         self.result.pack(side="right")
 
+    # -- about dialog ---------------------------------------------------------
+    def show_about(self):
+        win = tk.Toplevel(self.root)
+        win.title("About Mac Cleaner")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.transient(self.root)
+        try:
+            win.tk.call(
+                "::tk::unsupported::MacWindowStyle", "appearance", win._w, "darkAqua"
+            )
+        except tk.TclError:
+            pass
+
+        body = tk.Frame(win, bg=BG, padx=44, pady=30)
+        body.pack()
+
+        if self._icon_image is not None:
+            factor = max(1, self._icon_image.width() // 110)
+            self._about_icon = self._icon_image.subsample(factor, factor)
+            tk.Label(body, image=self._about_icon, bg=BG).pack()
+
+        tk.Label(
+            body, text="Mac Cleaner", fg=TEXT, bg=BG, font=(FONT, 20, "bold")
+        ).pack(pady=(8, 0))
+        tk.Label(
+            body, text=f"Version {__version__}", fg=FAINT, bg=BG, font=(FONT, 11)
+        ).pack()
+
+        tk.Frame(body, bg=BORDER, height=1, width=240).pack(pady=16)
+
+        tk.Label(
+            body, text=f"Developed by {AUTHOR}", fg=TEXT, bg=BG, font=(FONT, 13)
+        ).pack()
+        tk.Label(
+            body, text=f"@{AUTHOR_HANDLE}", fg=DIM, bg=BG, font=(FONT, 11)
+        ).pack(pady=(1, 12))
+
+        for label, url in (
+            ("GitHub profile", URL_GITHUB),
+            ("LinkedIn", URL_LINKEDIN),
+            ("Source code & releases", URL_REPO),
+        ):
+            link = tk.Label(
+                body,
+                text=label,
+                fg=ACCENT,
+                bg=BG,
+                font=(FONT, 12),
+                cursor="pointinghand",
+            )
+            link.pack(pady=2)
+            link.bind("<Button-1>", lambda _e, u=url: webbrowser.open(u))
+            link.bind("<Enter>", lambda _e, w=link: w.configure(fg="#7DB2FF"))
+            link.bind("<Leave>", lambda _e, w=link: w.configure(fg=ACCENT))
+
+        tk.Label(
+            body,
+            text="MIT License — free & open source",
+            fg=FAINT,
+            bg=BG,
+            font=(FONT, 10),
+        ).pack(pady=(16, 0))
+
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + 120
+        win.geometry(f"+{x}+{y}")
+
     # -- row painting ---------------------------------------------------------
     def _paint_row(self, cid, color):
         for w in self.rows[cid]["widgets"]:
@@ -668,7 +953,7 @@ class MacCleanerApp:
     def select_safe(self):
         if self.busy:
             return
-        for c in CATEGORIES:
+        for c in self.visible_categories():
             self.selected[c["id"]] = c["badge"] == "SAFE"
             self._refresh_row(c["id"])
         self._update_footer_hint()
@@ -676,13 +961,13 @@ class MacCleanerApp:
     def select_none(self):
         if self.busy:
             return
-        for c in CATEGORIES:
+        for c in self.visible_categories():
             self.selected[c["id"]] = False
             self._refresh_row(c["id"])
         self._update_footer_hint()
 
     def _update_footer_hint(self):
-        chosen = [c for c in CATEGORIES if self.selected[c["id"]]]
+        chosen = [c for c in self.visible_categories() if self.selected[c["id"]]]
         total = sum(self.sizes.get(c["id"], 0) for c in chosen)
         if chosen and total:
             self.status.configure(
@@ -695,7 +980,9 @@ class MacCleanerApp:
         self.busy = busy
         for btn in (self.clean_btn, self.rescan_btn):
             btn.configure(bg="#22293A" if busy else btn._base_bg)
-            btn.configure(fg=FAINT if busy else ("#FFFFFF" if btn is self.clean_btn else TEXT))
+            btn.configure(
+                fg=FAINT if busy else ("#FFFFFF" if btn is self.clean_btn else TEXT)
+            )
 
     # -- animation -------------------------------------------------------------
     def _animate(self):
@@ -703,7 +990,7 @@ class MacCleanerApp:
             self.spin_i = (self.spin_i + 1) % len(SPINNER)
             frame = SPINNER[self.spin_i]
             current = self.status.cget("text")
-            if "·" in current or current.startswith(tuple(SPINNER)) or current:
+            if current:
                 base = current.lstrip("".join(SPINNER)).lstrip()
                 self.status.configure(text=f"{frame} {base}")
             if self.active_cid:
@@ -724,14 +1011,16 @@ class MacCleanerApp:
             return
         self._set_busy(True)
         self.result.configure(text="")
-        self.status.configure(text="Scanning…", fg=DIM)
-        for c in CATEGORIES:
+        label = "Deep scanning…" if self.mode == "deep" else "Scanning…"
+        self.status.configure(text=label, fg=DIM)
+        cats = self.visible_categories()
+        for c in cats:
             self.rows[c["id"]]["size"].configure(text="…", fg=FAINT)
             self._set_row_state(c["id"], "", GREEN)
-        threading.Thread(target=self._scan_worker, daemon=True).start()
+        threading.Thread(target=self._scan_worker, args=(cats,), daemon=True).start()
 
-    def _scan_worker(self):
-        for category in CATEGORIES:
+    def _scan_worker(self, cats):
+        for category in cats:
             try:
                 kb = du_kb(category["paths"]())
             except Exception:
@@ -743,7 +1032,7 @@ class MacCleanerApp:
     def clean(self):
         if self.busy:
             return
-        chosen = [c for c in CATEGORIES if self.selected[c["id"]]]
+        chosen = [c for c in self.visible_categories() if self.selected[c["id"]]]
         chosen = [c for c in chosen if self.sizes.get(c["id"], 0) > 0]
         if not chosen:
             messagebox.showinfo(
@@ -856,9 +1145,7 @@ class MacCleanerApp:
                         self.status.configure(
                             text=f"Finished with issues: {names}", fg=AMBER
                         )
-                        self.result.configure(
-                            text=f"Freed {human(a)}", fg=AMBER
-                        )
+                        self.result.configure(text=f"Freed {human(a)}", fg=AMBER)
                     elif a == 0:
                         self.status.configure(text="", fg=DIM)
                         self.result.configure(
