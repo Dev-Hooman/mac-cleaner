@@ -16,10 +16,10 @@ files, documents, or settings.
 
 ![Mac Cleaner main window](screenshots/main.png)
 
-Individual selection with per-item confirmation for anything that isn't a
-regenerating cache:
+Animated per-row progress while cleaning, honest per-row outcomes
+(`✓ CLEANED`, `PARTIAL`, `SKIPPED`) and a real freed-space total when done:
 
-![Selection and safety badges](screenshots/selection.png)
+![Cleaning result](screenshots/success.png)
 
 ## Why another cleaner?
 

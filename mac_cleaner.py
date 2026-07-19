@@ -24,26 +24,35 @@ except ModuleNotFoundError:
         "or download the pre-built app from the GitHub releases page."
     )
 
+__version__ = "1.1.0"
+
 HOME = os.path.expanduser("~")
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ---------------------------------------------------------------------------
 # Palette
 # ---------------------------------------------------------------------------
 BG = "#0B0E14"
 CARD = "#10141D"
-CARD_SEL = "#16203A"
+CARD_SEL = "#131C2E"
 CARD_HOVER = "#141926"
 BORDER = "#1C2230"
 TEXT = "#E6EAF2"
 DIM = "#8A93A6"
+FAINT = "#4B5566"
 ACCENT = "#3B82F6"
-GREEN = "#22C55E"
-AMBER = "#F59E0B"
-RED = "#EF4444"
+GREEN = "#34D399"
+AMBER = "#FBBF24"
+RED = "#F87171"
 
-BADGE_COLORS = {"SAFE": GREEN, "CAUTION": AMBER, "ADMIN": RED}
+BADGES = {
+    "SAFE": {"fg": GREEN, "bg": "#0E2A1F"},
+    "CAUTION": {"fg": AMBER, "bg": "#2E2410"},
+    "ADMIN": {"fg": RED, "bg": "#331418"},
+}
 
 FONT = "Helvetica Neue"
+SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
 # ---------------------------------------------------------------------------
@@ -58,13 +67,6 @@ def _children(directory):
         return [os.path.join(directory, c) for c in os.listdir(directory)]
     except OSError:
         return []
-
-
-def _app_support(*names):
-    out = []
-    for name in names:
-        out.append(os.path.join(HOME, "Library", "Application Support", name))
-    return out
 
 
 def paths_user_caches():
@@ -134,7 +136,9 @@ def paths_old_claude_cli():
 
 
 def paths_stremio():
-    return _existing(*_app_support("stremio-server"))
+    return _existing(
+        os.path.join(HOME, "Library", "Application Support", "stremio-server")
+    )
 
 
 def paths_expo():
@@ -183,7 +187,6 @@ def paths_system_simulators():
 CATEGORIES = [
     {
         "id": "caches",
-        "icon": "🧹",
         "name": "App & system caches",
         "desc": "~/Library/Caches and ~/.cache — apps rebuild these automatically",
         "badge": "SAFE",
@@ -192,7 +195,6 @@ CATEGORIES = [
     },
     {
         "id": "npm",
-        "icon": "📦",
         "name": "JavaScript package caches",
         "desc": "npm, npx and pnpm download caches — restored on next install",
         "badge": "SAFE",
@@ -201,7 +203,6 @@ CATEGORIES = [
     },
     {
         "id": "gradle",
-        "icon": "🐘",
         "name": "Gradle build cache",
         "desc": "~/.gradle caches and daemons — rebuilt on next Android build",
         "badge": "SAFE",
@@ -210,7 +211,6 @@ CATEGORIES = [
     },
     {
         "id": "xcode",
-        "icon": "🔨",
         "name": "Xcode derived data",
         "desc": "DerivedData and device support files — Xcode regenerates them",
         "badge": "SAFE",
@@ -219,7 +219,6 @@ CATEGORIES = [
     },
     {
         "id": "editors",
-        "icon": "📝",
         "name": "Editor caches",
         "desc": "VS Code / Cursor cache folders — settings are not touched",
         "badge": "SAFE",
@@ -228,7 +227,6 @@ CATEGORIES = [
     },
     {
         "id": "claude",
-        "icon": "🤖",
         "name": "Claude app caches",
         "desc": "VM bundles and caches — re-downloaded when needed",
         "badge": "SAFE",
@@ -237,7 +235,6 @@ CATEGORIES = [
     },
     {
         "id": "claude_cli",
-        "icon": "⌨️",
         "name": "Old Claude CLI versions",
         "desc": "Superseded CLI builds — the newest version is kept",
         "badge": "SAFE",
@@ -246,7 +243,6 @@ CATEGORIES = [
     },
     {
         "id": "stremio",
-        "icon": "🎬",
         "name": "Stremio stream cache",
         "desc": "Cached video streams — safe to remove",
         "badge": "SAFE",
@@ -255,7 +251,6 @@ CATEGORIES = [
     },
     {
         "id": "expo",
-        "icon": "📱",
         "name": "Expo caches",
         "desc": "Expo Go and APK caches — re-downloaded when needed",
         "badge": "SAFE",
@@ -264,7 +259,6 @@ CATEGORIES = [
     },
     {
         "id": "trash",
-        "icon": "🗑️",
         "name": "Trash",
         "desc": "Empties the Trash — files cannot be recovered afterwards",
         "badge": "CAUTION",
@@ -273,7 +267,6 @@ CATEGORIES = [
     },
     {
         "id": "avd",
-        "icon": "🧬",
         "name": "Android emulator data",
         "desc": "Wipes emulator storage — it boots fresh, apps inside are lost",
         "badge": "CAUTION",
@@ -282,7 +275,6 @@ CATEGORIES = [
     },
     {
         "id": "sim_user",
-        "icon": "🍏",
         "name": "iOS simulator devices",
         "desc": "Simulator devices and their data — recreated by Xcode",
         "badge": "CAUTION",
@@ -291,7 +283,6 @@ CATEGORIES = [
     },
     {
         "id": "sim_system",
-        "icon": "⚙️",
         "name": "iOS simulator runtimes (system)",
         "desc": "Runtime disk images in /Library — needs admin password",
         "badge": "ADMIN",
@@ -360,14 +351,41 @@ def delete_paths(paths):
     return errors
 
 
+def _sh_quote(path):
+    return "'" + path.replace("'", "'\\''") + "'"
+
+
 def delete_admin_paths(paths):
-    """Delete root-owned paths via a native macOS password prompt."""
-    quoted = " ".join("'" + p.replace("'", "'\\''") + "'" for p in paths)
-    script = f'do shell script "rm -rf {quoted}" with administrator privileges'
-    result = subprocess.run(
-        ["osascript", "-e", script], capture_output=True, text=True
+    """Delete root-owned paths via a native macOS password prompt.
+
+    Simulator runtimes are mounted as volumes — a plain rm -rf silently
+    fails on the mountpoint, so any mounted volume beneath a target is
+    detached first, inside the same privileged shell.
+
+    Returns (ok, detail): detail is "cancelled" when the user dismissed
+    the password prompt, otherwise stderr from the failed shell.
+    """
+    commands = []
+    for p in paths:
+        volumes_dir = os.path.join(p, "Volumes")
+        if os.path.isdir(volumes_dir):
+            commands.append(
+                "for v in " + _sh_quote(volumes_dir) + "/*; do "
+                '/usr/bin/hdiutil detach "$v" -force >/dev/null 2>&1 || true; done'
+            )
+        commands.append("rm -rf " + _sh_quote(p))
+    shell = "; ".join(commands)
+    script = (
+        'do shell script "'
+        + shell.replace("\\", "\\\\").replace('"', '\\"')
+        + '" with administrator privileges'
     )
-    return result.returncode == 0
+    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    if result.returncode == 0:
+        return True, ""
+    if "canceled" in result.stderr.lower() or "-128" in result.stderr:
+        return False, "cancelled"
+    return False, result.stderr.strip()[:200]
 
 
 def brew_cleanup():
@@ -397,6 +415,8 @@ class MacCleanerApp:
         self.sizes = {}
         self.selected = {c["id"]: c["default"] for c in CATEGORIES}
         self.busy = False
+        self.active_cid = None
+        self.spin_i = 0
 
         root.title("Mac Cleaner")
         root.geometry("880x680")
@@ -408,6 +428,17 @@ class MacCleanerApp:
             )
         except tk.TclError:
             pass
+        for icon_path in (
+            os.path.join(APP_DIR, "assets", "icon.png"),
+            os.path.join(APP_DIR, "icon.png"),
+        ):
+            if os.path.exists(icon_path):
+                try:
+                    self._icon_image = tk.PhotoImage(file=icon_path)
+                    root.iconphoto(True, self._icon_image)
+                except tk.TclError:
+                    pass
+                break
 
         self._build_header()
         self._build_toolbar()
@@ -415,69 +446,79 @@ class MacCleanerApp:
         self._build_footer()
 
         root.after(80, self._poll_events)
+        root.after(90, self._animate)
         self.scan()
 
     # -- layout -------------------------------------------------------------
     def _build_header(self):
         header = tk.Frame(self.root, bg=BG)
-        header.pack(fill="x", padx=28, pady=(22, 6))
+        header.pack(fill="x", padx=30, pady=(24, 4))
 
         left = tk.Frame(header, bg=BG)
         left.pack(side="left")
         tk.Label(
-            left, text="Mac Cleaner", fg=TEXT, bg=BG, font=(FONT, 26, "bold")
+            left, text="Mac Cleaner", fg=TEXT, bg=BG, font=(FONT, 25, "bold")
         ).pack(anchor="w")
         tk.Label(
             left,
-            text="Reclaim disk space — only regenerating caches, never your files",
+            text="Only regenerating caches and build artifacts — never your files.",
             fg=DIM,
             bg=BG,
             font=(FONT, 12),
-        ).pack(anchor="w")
+        ).pack(anchor="w", pady=(2, 0))
 
         right = tk.Frame(header, bg=BG)
         right.pack(side="right")
         self.free_label = tk.Label(
-            right, text="—", fg=GREEN, bg=BG, font=(FONT, 24, "bold")
+            right, text="—", fg=TEXT, bg=BG, font=(FONT, 22, "bold")
         )
         self.free_label.pack(anchor="e")
-        tk.Label(right, text="free on disk", fg=DIM, bg=BG, font=(FONT, 11)).pack(
+        tk.Label(right, text="FREE ON DISK", fg=FAINT, bg=BG, font=(FONT, 10, "bold")).pack(
             anchor="e"
         )
 
     def _build_toolbar(self):
         bar = tk.Frame(self.root, bg=BG)
-        bar.pack(fill="x", padx=28, pady=(10, 8))
+        bar.pack(fill="x", padx=30, pady=(14, 10))
 
-        self.clean_btn = self._button(
-            bar, "Clean Selected", ACCENT, self.clean, padx=18
-        )
+        self.clean_btn = self._button(bar, "Clean Selected", self.clean, primary=True)
         self.clean_btn.pack(side="right")
-        self.rescan_btn = self._button(bar, "Rescan", CARD_SEL, self.scan)
+        self.rescan_btn = self._button(bar, "Rescan", self.scan)
         self.rescan_btn.pack(side="right", padx=(0, 10))
 
-        self._button(bar, "Select safe", CARD, self.select_safe).pack(side="left")
-        self._button(bar, "Select none", CARD, self.select_none).pack(
-            side="left", padx=(10, 0)
+        self._text_button(bar, "Select safe", self.select_safe).pack(side="left")
+        tk.Label(bar, text="·", fg=FAINT, bg=BG, font=(FONT, 12)).pack(
+            side="left", padx=6
         )
+        self._text_button(bar, "Select none", self.select_none).pack(side="left")
 
-    def _button(self, parent, text, color, command, padx=14):
+    def _button(self, parent, text, command, primary=False):
         btn = tk.Label(
             parent,
             text=text,
-            fg=TEXT,
-            bg=color,
+            fg="#FFFFFF" if primary else TEXT,
+            bg=ACCENT if primary else CARD_SEL,
             font=(FONT, 12, "bold"),
-            padx=padx,
+            padx=18 if primary else 14,
             pady=8,
             cursor="pointinghand",
         )
+        btn._base_bg = ACCENT if primary else CARD_SEL
         btn.bind("<Button-1>", lambda _e: command())
+        return btn
+
+    def _text_button(self, parent, text, command):
+        btn = tk.Label(
+            parent, text=text, fg=DIM, bg=BG, font=(FONT, 12), cursor="pointinghand"
+        )
+        btn.bind("<Button-1>", lambda _e: command())
+        btn.bind("<Enter>", lambda _e: btn.configure(fg=TEXT))
+        btn.bind("<Leave>", lambda _e: btn.configure(fg=DIM))
         return btn
 
     def _build_list(self):
         outer = tk.Frame(self.root, bg=BORDER)
-        outer.pack(fill="both", expand=True, padx=28, pady=(0, 4))
+        outer.pack(fill="both", expand=True, padx=30, pady=(0, 6))
         inner_holder = tk.Frame(outer, bg=BG)
         inner_holder.pack(fill="both", expand=True, padx=1, pady=1)
 
@@ -510,14 +551,18 @@ class MacCleanerApp:
 
     def _build_row(self, category):
         cid = category["id"]
-        row = tk.Frame(self.list_frame, bg=CARD, pady=10)
-        row.pack(fill="x", pady=(0, 6), padx=6)
+        row = tk.Frame(self.list_frame, bg=CARD, pady=11)
+        row.pack(fill="x", pady=(0, 5), padx=6)
 
-        check = tk.Label(row, text="", width=2, bg=CARD, font=(FONT, 14, "bold"))
-        check.pack(side="left", padx=(14, 4))
-
-        icon = tk.Label(row, text=category["icon"], bg=CARD, font=(FONT, 16))
-        icon.pack(side="left", padx=(0, 10))
+        check = tk.Label(
+            row,
+            text="",
+            width=2,
+            bg="#1A2130",
+            fg="#FFFFFF",
+            font=(FONT, 11, "bold"),
+        )
+        check.pack(side="left", padx=(16, 14))
 
         text_frame = tk.Frame(row, bg=CARD)
         text_frame.pack(side="left", fill="x", expand=True)
@@ -527,39 +572,56 @@ class MacCleanerApp:
             name_row, text=category["name"], fg=TEXT, bg=CARD, font=(FONT, 13, "bold")
         )
         name.pack(side="left")
+        badge_style = BADGES[category["badge"]]
         badge = tk.Label(
             name_row,
-            text=" " + category["badge"] + " ",
-            fg=BG,
-            bg=BADGE_COLORS[category["badge"]],
+            text=category["badge"],
+            fg=badge_style["fg"],
+            bg=badge_style["bg"],
             font=(FONT, 9, "bold"),
+            padx=6,
+            pady=1,
         )
-        badge.pack(side="left", padx=(8, 0))
+        badge.pack(side="left", padx=(10, 0))
+        state = tk.Label(name_row, text="", fg=GREEN, bg=CARD, font=(FONT, 10, "bold"))
+        state.pack(side="left", padx=(10, 0))
         desc = tk.Label(
             text_frame, text=category["desc"], fg=DIM, bg=CARD, font=(FONT, 11)
         )
-        desc.pack(anchor="w")
+        desc.pack(anchor="w", pady=(1, 0))
 
         size = tk.Label(
-            row, text="…", fg=TEXT, bg=CARD, font=(FONT, 14, "bold"), width=8, anchor="e"
+            row,
+            text="…",
+            fg=TEXT,
+            bg=CARD,
+            font=(FONT, 13, "bold"),
+            width=9,
+            anchor="e",
         )
-        size.pack(side="right", padx=(4, 16))
+        size.pack(side="right", padx=(4, 18))
 
-        widgets = [row, check, icon, text_frame, name_row, name, desc, size]
-        self.rows[cid] = {"widgets": widgets, "check": check, "size": size, "row": row}
+        widgets = [row, text_frame, name_row, name, desc, size, state]
+        self.rows[cid] = {
+            "widgets": widgets,
+            "check": check,
+            "size": size,
+            "state": state,
+            "row": row,
+        }
 
         def on_click(_event, c=cid):
             if not self.busy:
                 self.toggle(c)
 
         def on_enter(_event, c=cid):
-            if not self.selected[c]:
+            if not self.busy and not self.selected[c]:
                 self._paint_row(c, CARD_HOVER)
 
         def on_leave(_event, c=cid):
             self._paint_row(c, CARD_SEL if self.selected[c] else CARD)
 
-        for w in widgets + [badge]:
+        for w in widgets + [badge, check]:
             w.bind("<Button-1>", on_click)
             w.bind("<Enter>", on_enter)
             w.bind("<Leave>", on_leave)
@@ -567,12 +629,14 @@ class MacCleanerApp:
 
     def _build_footer(self):
         footer = tk.Frame(self.root, bg=BG)
-        footer.pack(fill="x", padx=28, pady=(4, 18))
+        footer.pack(fill="x", padx=30, pady=(4, 20))
         self.status = tk.Label(
             footer, text="", fg=DIM, bg=BG, font=(FONT, 12), anchor="w"
         )
         self.status.pack(side="left")
-        self.result = tk.Label(footer, text="", fg=GREEN, bg=BG, font=(FONT, 13, "bold"))
+        self.result = tk.Label(
+            footer, text="", fg=GREEN, bg=BG, font=(FONT, 13, "bold")
+        )
         self.result.pack(side="right")
 
     # -- row painting ---------------------------------------------------------
@@ -587,7 +651,13 @@ class MacCleanerApp:
         selected = self.selected[cid]
         self._paint_row(cid, CARD_SEL if selected else CARD)
         check = self.rows[cid]["check"]
-        check.configure(text="✓" if selected else "○", fg=ACCENT if selected else DIM)
+        if selected:
+            check.configure(text="✓", bg=ACCENT, fg="#FFFFFF")
+        else:
+            check.configure(text="", bg="#1A2130")
+
+    def _set_row_state(self, cid, text, color):
+        self.rows[cid]["state"].configure(text=text, fg=color)
 
     # -- selection ------------------------------------------------------------
     def toggle(self, cid):
@@ -612,23 +682,52 @@ class MacCleanerApp:
         self._update_footer_hint()
 
     def _update_footer_hint(self):
-        total = sum(
-            self.sizes.get(c["id"], 0) for c in CATEGORIES if self.selected[c["id"]]
-        )
-        if total:
-            self.status.configure(text=f"Selected: {human(total)}")
+        chosen = [c for c in CATEGORIES if self.selected[c["id"]]]
+        total = sum(self.sizes.get(c["id"], 0) for c in chosen)
+        if chosen and total:
+            self.status.configure(
+                text=f"{len(chosen)} selected · {human(total)}", fg=DIM
+            )
         else:
             self.status.configure(text="")
+
+    def _set_busy(self, busy):
+        self.busy = busy
+        for btn in (self.clean_btn, self.rescan_btn):
+            btn.configure(bg="#22293A" if busy else btn._base_bg)
+            btn.configure(fg=FAINT if busy else ("#FFFFFF" if btn is self.clean_btn else TEXT))
+
+    # -- animation -------------------------------------------------------------
+    def _animate(self):
+        if self.busy:
+            self.spin_i = (self.spin_i + 1) % len(SPINNER)
+            frame = SPINNER[self.spin_i]
+            current = self.status.cget("text")
+            if "·" in current or current.startswith(tuple(SPINNER)) or current:
+                base = current.lstrip("".join(SPINNER)).lstrip()
+                self.status.configure(text=f"{frame} {base}")
+            if self.active_cid:
+                self.rows[self.active_cid]["size"].configure(text=frame, fg=ACCENT)
+        self.root.after(90, self._animate)
+
+    def _count_up(self, target_kb, step=0):
+        steps = 22
+        eased = 1 - (1 - step / steps) ** 3
+        shown = int(target_kb * eased)
+        self.result.configure(text=f"✓ Clean successful — freed {human(shown)}")
+        if step < steps:
+            self.root.after(28, lambda: self._count_up(target_kb, step + 1))
 
     # -- scan -----------------------------------------------------------------
     def scan(self):
         if self.busy:
             return
-        self.busy = True
+        self._set_busy(True)
         self.result.configure(text="")
-        self.status.configure(text="Scanning…")
+        self.status.configure(text="Scanning…", fg=DIM)
         for c in CATEGORIES:
-            self.rows[c["id"]]["size"].configure(text="…")
+            self.rows[c["id"]]["size"].configure(text="…", fg=FAINT)
+            self._set_row_state(c["id"], "", GREEN)
         threading.Thread(target=self._scan_worker, daemon=True).start()
 
     def _scan_worker(self):
@@ -647,7 +746,9 @@ class MacCleanerApp:
         chosen = [c for c in CATEGORIES if self.selected[c["id"]]]
         chosen = [c for c in chosen if self.sizes.get(c["id"], 0) > 0]
         if not chosen:
-            messagebox.showinfo("Mac Cleaner", "Nothing selected (or selection is empty).")
+            messagebox.showinfo(
+                "Mac Cleaner", "Nothing selected (or selection is empty)."
+            )
             return
 
         confirmed = []
@@ -658,7 +759,8 @@ class MacCleanerApp:
             if category["id"] == "avd" and emulator_running():
                 messagebox.showwarning(
                     "Mac Cleaner",
-                    "The Android emulator is running.\nClose it first — skipping the wipe.",
+                    "The Android emulator is running.\n"
+                    "Close it first — skipping the wipe.",
                 )
                 continue
             size = human(self.sizes.get(category["id"], 0))
@@ -670,30 +772,44 @@ class MacCleanerApp:
         if not confirmed:
             return
 
-        self.busy = True
-        self.status.configure(text="Cleaning…")
+        self._set_busy(True)
+        self.result.configure(text="")
         threading.Thread(
             target=self._clean_worker, args=(confirmed,), daemon=True
         ).start()
 
     def _clean_worker(self, chosen):
-        before = free_disk_kb()
+        freed = 0
+        issues = []
         for category in chosen:
-            self.events.put(("progress", category["name"], None))
+            cid = category["id"]
+            before = self.sizes.get(cid, 0)
+            self.events.put(("cleaning", cid, category["name"]))
+            outcome = ("ok", "")
             try:
                 paths = category["paths"]()
                 if category["badge"] == "ADMIN":
                     if paths:
-                        delete_admin_paths(paths)
+                        ok, detail = delete_admin_paths(paths)
+                        if not ok:
+                            outcome = ("fail", detail)
                 else:
                     delete_paths(paths)
-                if category["id"] == "caches":
+                if cid == "caches":
                     brew_cleanup()
-                self.events.put(("size", category["id"], du_kb(category["paths"]())))
-            except Exception:
-                pass
-        freed = max(0, free_disk_kb() - before)
-        self.events.put(("clean_done", freed, None))
+                remaining = du_kb(category["paths"]())
+            except Exception as exc:
+                outcome = ("fail", str(exc)[:200])
+                remaining = before
+            # cache dirs are recreated by running apps within seconds, so a
+            # small remainder is normal — only flag a real failure to shrink
+            if outcome[0] == "ok" and remaining > 51200 and remaining > before * 0.2:
+                outcome = ("partial", "")
+            freed += max(0, before - remaining)
+            self.events.put(("cleaned", cid, (remaining, outcome)))
+            if outcome[0] != "ok":
+                issues.append((category["name"], outcome))
+        self.events.put(("clean_done", freed, issues))
 
     # -- event pump ------------------------------------------------------------
     def _poll_events(self):
@@ -703,19 +819,55 @@ class MacCleanerApp:
                 if kind == "size":
                     self.sizes[a] = b
                     self.rows[a]["size"].configure(
-                        text=human(b) if b else "—", fg=TEXT if b else DIM
+                        text=human(b) if b else "—", fg=TEXT if b else FAINT
                     )
-                elif kind == "progress":
-                    self.status.configure(text=f"Cleaning: {a}…")
+                elif kind == "cleaning":
+                    self.active_cid = a
+                    self.status.configure(text=f"Cleaning {b}…", fg=DIM)
+                    self._set_row_state(a, "", GREEN)
+                elif kind == "cleaned":
+                    remaining, (state, detail) = b
+                    self.active_cid = None
+                    self.sizes[a] = remaining
+                    self.rows[a]["size"].configure(
+                        text=human(remaining) if remaining else "—",
+                        fg=TEXT if remaining else FAINT,
+                    )
+                    if state == "ok":
+                        self._set_row_state(a, "✓ CLEANED", GREEN)
+                    elif state == "partial":
+                        self._set_row_state(a, "PARTIAL — SOME FILES IN USE", AMBER)
+                    elif detail == "cancelled":
+                        self._set_row_state(a, "SKIPPED — PASSWORD CANCELLED", AMBER)
+                    else:
+                        self._set_row_state(a, "FAILED", RED)
                 elif kind == "scan_done":
-                    self.busy = False
+                    self._set_busy(False)
+                    self.active_cid = None
                     self._update_footer_hint()
                     self.free_label.configure(text=human(free_disk_kb()))
                 elif kind == "clean_done":
-                    self.busy = False
+                    self._set_busy(False)
+                    self.active_cid = None
                     self.free_label.configure(text=human(free_disk_kb()))
-                    self.result.configure(text=f"✓ Freed {human(a)}")
-                    self.status.configure(text="")
+                    issues = b
+                    if issues:
+                        names = ", ".join(name for name, _ in issues)
+                        self.status.configure(
+                            text=f"Finished with issues: {names}", fg=AMBER
+                        )
+                        self.result.configure(
+                            text=f"Freed {human(a)}", fg=AMBER
+                        )
+                    elif a == 0:
+                        self.status.configure(text="", fg=DIM)
+                        self.result.configure(
+                            text="✓ Already clean — nothing to remove", fg=GREEN
+                        )
+                    else:
+                        self.status.configure(text="", fg=DIM)
+                        self.result.configure(fg=GREEN)
+                        self._count_up(a)
         except queue.Empty:
             pass
         self.root.after(80, self._poll_events)
